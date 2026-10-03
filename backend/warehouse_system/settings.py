@@ -33,7 +33,8 @@ TEMPLATES = []
 WSGI_APPLICATION = "warehouse_system.wsgi.application"
 DATABASES = {
     "default": {
-        "ENGINE": "django.db.backends.sqlite3",
+        # 自定义引擎：写事务以 BEGIN IMMEDIATE 启动，避免并发写时的锁升级死锁
+        "ENGINE": "warehouse_system.sqlite_backend",
         "NAME": os.environ.get("SQLITE_PATH", str(BASE_DIR / "db.sqlite3")),
         "OPTIONS": {"timeout": 20},
     }

@@ -1,6 +1,8 @@
 """
 库房管理模型
 """
+from decimal import Decimal
+
 from django.db import models
 from apps.authentication.models import User
 
@@ -107,6 +109,8 @@ class Goods(models.Model):
     code = models.CharField('货物编码', max_length=50, unique=True)
     specification = models.CharField('规格型号', max_length=200, blank=True)
     quantity = models.DecimalField('库存数量', max_digits=12, decimal_places=2, default=0)
+    occupied_quantity = models.DecimalField('领用占用数量', max_digits=12, decimal_places=2, default=0)
+    frozen_quantity = models.DecimalField('冻结数量', max_digits=12, decimal_places=2, default=0)
     warning_threshold = models.DecimalField('预警阈值', max_digits=12, decimal_places=2, default=10)
     location = models.CharField('存放位置', max_length=100, blank=True)
     remark = models.TextField('备注', blank=True)
@@ -122,7 +126,12 @@ class Goods(models.Model):
     
     def __str__(self):
         return self.name
-    
+
+    @property
+    def available_quantity(self):
+        """可用数量 = 库存数量 - 领用占用 - 冻结数量"""
+        return self.quantity - (self.occupied_quantity or Decimal('0')) - (self.frozen_quantity or Decimal('0'))
+
     @property
     def is_warning(self):
         """是否预警"""
@@ -246,3 +255,256 @@ class Approval(models.Model):
     
     def __str__(self):
         return f"{self.stock_out} - {self.get_status_display()}"
+
+
+# ==================== 领用包（固定组合领用） ====================
+
+class KitTemplate(models.Model):
+    """领用包定义：办案人员常用的固定物资组合"""
+    name = models.CharField('领用包名称', max_length=100, unique=True)
+    description = models.TextField('说明', blank=True)
+    created_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True,
+        related_name='created_kits', verbose_name='创建人'
+    )
+    is_active = models.BooleanField('是否启用', default=True)
+    created_at = models.DateTimeField('创建时间', auto_now_add=True)
+    updated_at = models.DateTimeField('更新时间', auto_now=True)
+
+    class Meta:
+        db_table = 'wh_kit_template'
+        verbose_name = '领用包定义'
+        verbose_name_plural = verbose_name
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return self.name
+
+    @property
+    def active_version(self):
+        """当前生效版本"""
+        return self.versions.filter(status='active').order_by('-version_no').first()
+
+    @property
+    def latest_version(self):
+        """最新版本（含草稿）"""
+        return self.versions.order_by('-version_no').first()
+
+
+class KitVersion(models.Model):
+    """领用包版本：定义一经生效即不可变，调整通过升级新版本完成"""
+    STATUS_CHOICES = [
+        ('draft', '草稿'),
+        ('active', '已生效'),
+        ('archived', '已归档'),
+    ]
+
+    template = models.ForeignKey(
+        KitTemplate, on_delete=models.PROTECT,
+        related_name='versions', verbose_name='领用包'
+    )
+    version_no = models.PositiveIntegerField('版本号')
+    status = models.CharField('状态', max_length=20, choices=STATUS_CHOICES, default='draft')
+    change_remark = models.TextField('升级说明', blank=True)
+    created_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True,
+        related_name='created_kit_versions', verbose_name='创建人'
+    )
+    created_at = models.DateTimeField('创建时间', auto_now_add=True)
+    updated_at = models.DateTimeField('更新时间', auto_now=True)
+
+    class Meta:
+        db_table = 'wh_kit_version'
+        verbose_name = '领用包版本'
+        verbose_name_plural = verbose_name
+        ordering = ['template', '-version_no']
+        unique_together = ['template', 'version_no']
+
+    def __str__(self):
+        return f"{self.template.name} V{self.version_no}"
+
+    @property
+    def is_immutable(self):
+        """生效/归档版本不可修改"""
+        return self.status in ('active', 'archived')
+
+
+class KitItemGroup(models.Model):
+    """可替代项分组：组内需任选一种物资（如不同型号的封存介质）"""
+    version = models.ForeignKey(
+        KitVersion, on_delete=models.CASCADE,
+        related_name='groups', verbose_name='包版本'
+    )
+    name = models.CharField('分组名称', max_length=100)
+    quantity = models.DecimalField('需求数量', max_digits=12, decimal_places=2)
+    required = models.BooleanField('是否必需', default=True)
+    order = models.PositiveIntegerField('排序', default=0)
+
+    class Meta:
+        db_table = 'wh_kit_item_group'
+        verbose_name = '可替代项分组'
+        verbose_name_plural = verbose_name
+        ordering = ['order', 'id']
+        unique_together = ['version', 'name']
+
+    def __str__(self):
+        return f"{self.version} - {self.name}"
+
+
+class KitItem(models.Model):
+    """领用包明细：组外明细为固定项（可标记可选），组内明细为可替代候选项"""
+    version = models.ForeignKey(
+        KitVersion, on_delete=models.CASCADE,
+        related_name='items', verbose_name='包版本'
+    )
+    group = models.ForeignKey(
+        KitItemGroup, on_delete=models.CASCADE, null=True, blank=True,
+        related_name='candidates', verbose_name='所属替代分组'
+    )
+    goods = models.ForeignKey(
+        Goods, on_delete=models.PROTECT,
+        related_name='kit_items', verbose_name='货物'
+    )
+    quantity = models.DecimalField('需求数量', max_digits=12, decimal_places=2, default=1)
+    required = models.BooleanField('是否必需', default=True)
+    order = models.PositiveIntegerField('排序', default=0)
+
+    class Meta:
+        db_table = 'wh_kit_item'
+        verbose_name = '领用包明细'
+        verbose_name_plural = verbose_name
+        ordering = ['order', 'id']
+
+    def __str__(self):
+        return f"{self.version} - {self.goods.name} x{self.quantity}"
+
+
+class StockFreeze(models.Model):
+    """物资冻结/解冻记录：被冻结数量不可被领用占用"""
+    TYPE_CHOICES = [
+        ('freeze', '冻结'),
+        ('unfreeze', '解冻'),
+    ]
+
+    goods = models.ForeignKey(
+        Goods, on_delete=models.CASCADE,
+        related_name='freeze_records', verbose_name='货物'
+    )
+    type = models.CharField('类型', max_length=20, choices=TYPE_CHOICES)
+    quantity = models.DecimalField('数量', max_digits=12, decimal_places=2)
+    reason = models.TextField('冻结/解冻原因')
+    operator = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True,
+        related_name='stock_freeze_operations', verbose_name='操作人'
+    )
+    created_at = models.DateTimeField('创建时间', auto_now_add=True)
+
+    class Meta:
+        db_table = 'wh_stock_freeze'
+        verbose_name = '物资冻结记录'
+        verbose_name_plural = verbose_name
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.goods.name} {self.get_type_display()} {self.quantity}"
+
+
+class KitRequest(models.Model):
+    """领用申请：按领用包某一版本展开并占用库存的整套申请"""
+    STATUS_CHOICES = [
+        ('pending', '待审批'),
+        ('approved', '已批准'),
+        ('rejected', '已驳回'),
+        ('issued', '已发放'),
+        ('partial_returned', '部分退回'),
+        ('returned', '全部退回'),
+        ('cancelled', '已撤回'),
+    ]
+
+    number = models.CharField('申请单号', max_length=32, unique=True, blank=True)
+    template = models.ForeignKey(
+        KitTemplate, on_delete=models.PROTECT,
+        related_name='requests', verbose_name='领用包'
+    )
+    version = models.ForeignKey(
+        KitVersion, on_delete=models.PROTECT,
+        related_name='requests', verbose_name='展开版本'
+    )
+    applicant = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True,
+        related_name='kit_requests', verbose_name='申请人'
+    )
+    receiver = models.CharField('领用人', max_length=100)
+    receiver_dept = models.CharField('领用部门', max_length=100, blank=True)
+    status = models.CharField('状态', max_length=20, choices=STATUS_CHOICES, default='pending')
+    remark = models.TextField('备注', blank=True)
+    approved_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='approved_kit_requests', verbose_name='审批人'
+    )
+    approved_at = models.DateTimeField('审批时间', null=True, blank=True)
+    created_at = models.DateTimeField('创建时间', auto_now_add=True)
+    updated_at = models.DateTimeField('更新时间', auto_now=True)
+
+    class Meta:
+        db_table = 'wh_kit_request'
+        verbose_name = '领用申请'
+        verbose_name_plural = verbose_name
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return self.number or f'kit-request-{self.pk}'
+
+    @property
+    def is_open(self):
+        """是否仍占用库存（待审批或已批准）"""
+        return self.status in ('pending', 'approved')
+
+    @property
+    def return_progress(self):
+        """退回进度：已退回数量 / 已发放数量"""
+        issued = sum((line.issued_quantity for line in self.lines.all()), Decimal('0'))
+        returned = sum((line.returned_quantity for line in self.lines.all()), Decimal('0'))
+        return returned, issued
+
+
+class KitRequestLine(models.Model):
+    """领用申请明细：申请提交时由包版本展开生成的具体物资占用"""
+    STATUS_CHOICES = [
+        ('occupied', '已占用'),
+        ('released', '已释放'),
+        ('issued', '已发放'),
+        ('partial_returned', '部分退回'),
+        ('returned', '已退回'),
+    ]
+
+    request = models.ForeignKey(
+        KitRequest, on_delete=models.CASCADE,
+        related_name='lines', verbose_name='领用申请'
+    )
+    goods = models.ForeignKey(
+        Goods, on_delete=models.PROTECT,
+        related_name='kit_request_lines', verbose_name='货物'
+    )
+    group = models.ForeignKey(
+        KitItemGroup, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='request_lines', verbose_name='替代分组'
+    )
+    group_name = models.CharField('分组名称', max_length=100, blank=True)
+    required = models.BooleanField('是否必需', default=True)
+    is_alternative = models.BooleanField('是否可替代项', default=False)
+    selection_reason = models.TextField('选择依据', blank=True)
+    quantity = models.DecimalField('申请数量', max_digits=12, decimal_places=2)
+    occupied_quantity = models.DecimalField('占用数量', max_digits=12, decimal_places=2, default=0)
+    issued_quantity = models.DecimalField('已发放数量', max_digits=12, decimal_places=2, default=0)
+    returned_quantity = models.DecimalField('已退回数量', max_digits=12, decimal_places=2, default=0)
+    status = models.CharField('状态', max_length=20, choices=STATUS_CHOICES, default='occupied')
+
+    class Meta:
+        db_table = 'wh_kit_request_line'
+        verbose_name = '领用申请明细'
+        verbose_name_plural = verbose_name
+        ordering = ['id']
+
+    def __str__(self):
+        return f"{self.request} - {self.goods.name} x{self.quantity}"
