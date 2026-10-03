@@ -7,7 +7,8 @@ from .views import (
     CategoryListView, CategoryDetailView, CategoryBatchDeleteView, CategoryAllView,
     VarietyListView, VarietyDetailView, VarietyBatchDeleteView,
     VarietyTemplateView, VarietyImportView,
-    DashboardView, GoodsListView, StockInListView, StockOutListView,
+    DashboardView, GoodsListView, GoodsFreezeView, GoodsUnfreezeView,
+    StockInListView, StockOutListView,
     WarningListView, ApprovalListView
 )
 
@@ -36,6 +37,8 @@ urlpatterns = [
     
     # 货物管理
     path('goods/', GoodsListView.as_view(), name='goods-list'),
+    path('goods/<int:pk>/freeze/', GoodsFreezeView.as_view(), name='goods-freeze'),
+    path('goods/<int:pk>/unfreeze/', GoodsUnfreezeView.as_view(), name='goods-unfreeze'),
     
     # 入库管理
     path('stock-in/', StockInListView.as_view(), name='stock-in-list'),

@@ -17,6 +17,7 @@ INSTALLED_APPS = [
     "apps.warehouse",
     "apps.personnel",
     "apps.reports",
+    "apps.kits",
 ]
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
@@ -36,6 +37,8 @@ DATABASES = {
         "ENGINE": "django.db.backends.sqlite3",
         "NAME": os.environ.get("SQLITE_PATH", str(BASE_DIR / "db.sqlite3")),
         "OPTIONS": {"timeout": 20},
+        # 测试库使用文件而非内存，使并发测试中的多线程连接共享同一数据库
+        "TEST": {"NAME": os.environ.get("SQLITE_TEST_PATH", str(BASE_DIR / "test_db.sqlite3"))},
     }
 }
 AUTH_PASSWORD_VALIDATORS = []

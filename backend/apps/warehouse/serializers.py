@@ -136,14 +136,17 @@ class GoodsSerializer(serializers.ModelSerializer):
     category_name = serializers.CharField(source='variety.category.name', read_only=True)
     unit_name = serializers.CharField(source='variety.category.unit.name', read_only=True)
     is_warning = serializers.BooleanField(read_only=True)
-    
+    available_quantity = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+
     class Meta:
         model = Goods
         fields = [
             'id', 'name', 'code', 'variety', 'variety_name',
             'category_name', 'unit_name', 'specification',
-            'quantity', 'warning_threshold', 'location',
+            'quantity', 'reserved_quantity', 'available_quantity',
+            'warning_threshold', 'location',
             'remark', 'is_active', 'is_warning',
+            'is_frozen', 'frozen_reason', 'frozen_at',
             'created_at', 'updated_at'
         ]
 

@@ -4,6 +4,7 @@
 import logging
 import io
 from django.http import HttpResponse
+from django.utils import timezone
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
@@ -576,7 +577,7 @@ class DashboardView(APIView):
 class GoodsListView(APIView):
     """货物列表视图"""
     permission_classes = [IsAuthenticated]
-    
+
     def get(self, request):
         return success_response(data={
             'list': [],
@@ -584,6 +585,55 @@ class GoodsListView(APIView):
             'page': 1,
             'page_size': 10
         })
+
+
+class GoodsFreezeView(APIView):
+    """货物冻结视图：冻结后不可再被领用申请占用或发放"""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        try:
+            goods = Goods.objects.get(pk=pk)
+        except Goods.DoesNotExist:
+            return error_response(message='货物不存在', code=404)
+
+        reason = str(request.data.get('reason', '')).strip()
+        if not reason:
+            return error_response(message='请填写冻结原因')
+        if goods.is_frozen:
+            return error_response(message='该货物已处于冻结状态')
+
+        goods.is_frozen = True
+        goods.frozen_reason = reason
+        goods.frozen_at = timezone.now()
+        goods.save(update_fields=['is_frozen', 'frozen_reason', 'frozen_at', 'updated_at'])
+
+        logger.info(f"User {request.user.username} froze goods {goods.name}: {reason}")
+
+        return success_response(data=GoodsSerializer(goods).data, message='冻结成功')
+
+
+class GoodsUnfreezeView(APIView):
+    """货物解冻视图"""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        try:
+            goods = Goods.objects.get(pk=pk)
+        except Goods.DoesNotExist:
+            return error_response(message='货物不存在', code=404)
+
+        if not goods.is_frozen:
+            return error_response(message='该货物未处于冻结状态')
+
+        goods.is_frozen = False
+        goods.frozen_reason = ''
+        goods.frozen_at = None
+        goods.save(update_fields=['is_frozen', 'frozen_reason', 'frozen_at', 'updated_at'])
+
+        logger.info(f"User {request.user.username} unfroze goods {goods.name}")
+
+        return success_response(data=GoodsSerializer(goods).data, message='解冻成功')
 
 
 class StockInListView(APIView):

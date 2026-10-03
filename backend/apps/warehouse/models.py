@@ -107,26 +107,35 @@ class Goods(models.Model):
     code = models.CharField('货物编码', max_length=50, unique=True)
     specification = models.CharField('规格型号', max_length=200, blank=True)
     quantity = models.DecimalField('库存数量', max_digits=12, decimal_places=2, default=0)
+    reserved_quantity = models.DecimalField('占用数量', max_digits=12, decimal_places=2, default=0)
     warning_threshold = models.DecimalField('预警阈值', max_digits=12, decimal_places=2, default=10)
     location = models.CharField('存放位置', max_length=100, blank=True)
     remark = models.TextField('备注', blank=True)
     is_active = models.BooleanField('是否启用', default=True)
+    is_frozen = models.BooleanField('是否冻结', default=False)
+    frozen_reason = models.TextField('冻结原因', blank=True)
+    frozen_at = models.DateTimeField('冻结时间', null=True, blank=True)
     created_at = models.DateTimeField('创建时间', auto_now_add=True)
     updated_at = models.DateTimeField('更新时间', auto_now=True)
-    
+
     class Meta:
         db_table = 'wh_goods'
         verbose_name = '货物'
         verbose_name_plural = verbose_name
         ordering = ['-created_at']
-    
+
     def __str__(self):
         return self.name
-    
+
     @property
     def is_warning(self):
         """是否预警"""
         return self.quantity <= self.warning_threshold
+
+    @property
+    def available_quantity(self):
+        """可用数量（库存减去已占用）"""
+        return self.quantity - self.reserved_quantity
 
 
 class StockIn(models.Model):

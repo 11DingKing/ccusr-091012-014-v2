@@ -90,3 +90,37 @@ class WarehouseAPITest(WarehouseFixture):
     def test_requires_authentication(self):
         anonymous = APIClient().get("/api/units/")
         self.assertEqual(anonymous.status_code, 401)
+
+
+class GoodsFreezeAPITest(WarehouseFixture):
+    def test_freeze_requires_reason(self):
+        response = self.client.post(f"/api/goods/{self.goods.id}/freeze/", {}, format="json")
+        self.assertEqual(response.status_code, 400)
+        self.goods.refresh_from_db()
+        self.assertFalse(self.goods.is_frozen)
+
+    def test_freeze_and_unfreeze(self):
+        frozen = self.client.post(
+            f"/api/goods/{self.goods.id}/freeze/", {"reason": "涉案暂扣"}, format="json"
+        )
+        self.assertEqual(frozen.status_code, 200)
+        self.goods.refresh_from_db()
+        self.assertTrue(self.goods.is_frozen)
+        self.assertEqual(self.goods.frozen_reason, "涉案暂扣")
+        self.assertIsNotNone(self.goods.frozen_at)
+
+        again = self.client.post(
+            f"/api/goods/{self.goods.id}/freeze/", {"reason": "重复冻结"}, format="json"
+        )
+        self.assertEqual(again.status_code, 400)
+
+        unfrozen = self.client.post(f"/api/goods/{self.goods.id}/unfreeze/")
+        self.assertEqual(unfrozen.status_code, 200)
+        self.goods.refresh_from_db()
+        self.assertFalse(self.goods.is_frozen)
+        self.assertEqual(self.goods.frozen_reason, "")
+        self.assertIsNone(self.goods.frozen_at)
+
+    def test_freeze_missing_goods(self):
+        response = self.client.post("/api/goods/99999/freeze/", {"reason": "不存在"}, format="json")
+        self.assertEqual(response.status_code, 404)
